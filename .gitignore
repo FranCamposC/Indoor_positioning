@@ -172,3 +172,17 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Ignorar entorno virtual de Python
+.venv/
+
+# Ignorar configuración de Visual Studio Code
+.vscode/
+
+# Ignorar archivos CSV
+*.csv
+
+# Ignorar imágenes específicas
+ParteDeAbajo.png
+Partedearriba.png
+image.png
