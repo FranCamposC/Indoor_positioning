@@ -60,4 +60,4 @@ Las alertas se configuran a través de una interfaz accesible e intuitiva.
 
 ## 📄 Licencia
 
-Este proyecto está bajo la licencia [MIT](LICENSE). Puedes usar, modificar y dis
+Este proyecto está bajo la licencia [MIT](LICENSE).
