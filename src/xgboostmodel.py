@@ -5,7 +5,7 @@ from xgboost import XGBClassifier
 import joblib
 
 # Cargar los datos desde el archivo CSV
-file_path = 'logs/DatosEjemplo.csv'  # Cambia esta ruta a la ubicación de tu archivo
+file_path = 'src/logs/DatosparaEntrenar.csv'  # Cambia esta ruta a la ubicación de tu archivo
 df = pd.read_csv(file_path)
 
 # Seleccionar las columnas relevantes
@@ -35,7 +35,7 @@ df_filtered.loc[X_train.index, 'Set'] = 'Train'
 df_filtered.loc[X_test.index, 'Set'] = 'Test'
 
 # Guardar el DataFrame con las marcas de Train/Test
-df_filtered.to_csv('logs/dataset_conjuntos.csv', index=False)
+df_filtered.to_csv('src/logs/dataset_conjuntos.csv', index=False)
 
 # Entrenar el modelo para 'Habitacion' con XGBoost
 model_habitacion = XGBClassifier(
@@ -75,10 +75,10 @@ accuracy_posicion = model_posicion.score(X_test, y_posicion_test)
 print(f"Precisión del modelo 'Posicion' en el conjunto de prueba: {accuracy_posicion * 100:.2f}%")
 
 # Guardar los modelos y los LabelEncoders
-joblib.dump(model_habitacion, 'logs/xgboost_habitacion_model.pkl')
-joblib.dump(label_encoder_habitacion, 'logs/xgboost_label_encoder_habitacion.pkl')
+joblib.dump(model_habitacion, 'src/logs/xgboost_habitacion_model.pkl')
+joblib.dump(label_encoder_habitacion, 'src/logs/xgboost_label_encoder_habitacion.pkl')
 
-joblib.dump(model_posicion, 'logs/xgboost_posicion_model.pkl')
-joblib.dump(label_encoder_posicion, 'logs/xgboost_label_encoder_posicion.pkl')
+joblib.dump(model_posicion, 'src/logs/xgboost_posicion_model.pkl')
+joblib.dump(label_encoder_posicion, 'src/logs/xgboost_label_encoder_posicion.pkl')
 
 print("Modelos entrenados y guardados correctamente.")

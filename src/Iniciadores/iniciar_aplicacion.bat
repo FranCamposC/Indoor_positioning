@@ -1,6 +1,18 @@
 @echo off
-cd /d "%~dp0"
+REM Movernos a la raíz del proyecto
+pushd "%~dp0\..\.."
 
-start cmd /k ".venv\Scripts\python.exe prediccion.py"
-start cmd /k ".venv\Scripts\python.exe accion.py"
-start cmd /k ".venv\Scripts\python.exe -m streamlit run GUI.py"
+REM Comprobar que el entorno existe
+if not exist ".venv\Scripts\python.exe" (
+    echo El entorno virtual .venv no existe. Ejecuta primero setup_env.bat
+    pause
+    exit /b
+)
+
+REM Ejecutar los scripts en nuevas terminales
+start cmd /k ".venv\Scripts\python.exe src\prediccion.py"
+start cmd /k ".venv\Scripts\python.exe src\accion.py"
+start cmd /k ".venv\Scripts\python.exe -m streamlit run src\GUI.py"
+
+REM Volver al directorio original
+popd

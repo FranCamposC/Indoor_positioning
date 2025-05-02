@@ -14,10 +14,10 @@ MQTT_PASSWORD = "1234"
 MQTT_TOPIC = "receivers/#"
 
 # Cargar los modelos
-MODEL_HABITACION_PATH = 'logs/xgboost_habitacion_model.pkl'
-ENCODER_HABITACION_PATH = 'logs/xgboost_label_encoder_habitacion.pkl'
-MODEL_POSICION_PATH = 'logs/xgboost_posicion_model.pkl'
-ENCODER_POSICION_PATH = 'logs/xgboost_label_encoder_posicion.pkl'
+MODEL_HABITACION_PATH = 'src/logs/xgboost_habitacion_model.pkl'
+ENCODER_HABITACION_PATH = 'src/logs/xgboost_label_encoder_habitacion.pkl'
+MODEL_POSICION_PATH = 'src/logs/xgboost_posicion_model.pkl'
+ENCODER_POSICION_PATH = 'src/logs/xgboost_label_encoder_posicion.pkl'
 
 model_habitacion = joblib.load(MODEL_HABITACION_PATH)
 label_encoder_habitacion = joblib.load(ENCODER_HABITACION_PATH)
@@ -37,7 +37,7 @@ umbral_confianza_habitacion = 0.40
 umbral_confianza_posicion = 0.00
 
 # Archivo donde se guardarán las predicciones
-OUTPUT_CSV = 'logs/predicciones_xgboost.csv'
+OUTPUT_CSV = 'src/logs/predicciones_xgboost.csv'
 
 # Estructuras de datos globales
 current_row = None

@@ -14,8 +14,8 @@ from streamlit.runtime.scriptrunner import RerunException, RerunData
 # Para que la interfaz ocupe toda la pantalla
 st.set_page_config(layout='centered')   
 
-CSV_PATH = "logs/predicciones_xgboost.csv"
-MAPA_PATH = "fotos/ParteDeArriba.png"
+CSV_PATH = "src/logs/predicciones_xgboost.csv"
+MAPA_PATH = "src/fotos/ParteDeArriba.png"
 
 TIEMPO_VISIBLE_TRANSICIONES = 10  # segundos que se ven las líneas de transición
 transiciones = []

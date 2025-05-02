@@ -13,8 +13,8 @@ MQTT_PASSWORD = "1234"
 MQTT_TOPIC = "receivers/#"  # Usar # para suscribirse a múltiples tópicos
 
 # Nombre del archivo CSV en la carpeta 'logs'
-LOGS_DIR = 'logs'
-CSV_FILE = os.path.join(LOGS_DIR, 'datosEjemplo.csv')
+LOGS_DIR = 'src/logs'
+CSV_FILE = os.path.join(LOGS_DIR, 'datosparaEntrenar.csv')
 
 # Crear la carpeta 'logs' si no existe
 if not os.path.exists(LOGS_DIR):
