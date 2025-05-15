@@ -11,7 +11,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 REM Ejecutar los scripts en nuevas terminales
 start cmd /k ".venv\Scripts\python.exe src\prediccion.py"
-start cmd /k ".venv\Scripts\python.exe src\accion.py"
+start cmd /k ".venv\Scripts\python.exe src\accionNew.py"
 start cmd /k ".venv\Scripts\python.exe -m streamlit run src\GUI.py"
 
 REM Volver al directorio original

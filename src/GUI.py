@@ -1,3 +1,5 @@
+import os
+from dotenv import load_dotenv  # pip install python-dotenv
 import datetime
 import streamlit as st
 import pandas as pd
@@ -5,618 +7,433 @@ import time
 import matplotlib.pyplot as plt
 from PIL import Image, ImageDraw
 import io
+import smtplib  # Para enviar emails
+from email.mime.text import MIMEText  # Para crear el mensaje de email
+import streamlit.components.v1 as components  # Para mostrar alertas en HTML
 from streamlit.runtime.scriptrunner import RerunException, RerunData
+
+# ----------------------------------------------------------------------
+# CARGA DE VARIABLES DE ENTORNO
+# ----------------------------------------------------------------------
+# Crea un fichero .env (añádelo a .gitignore) con:
+# EMAIL_USER=tu_usuario@gmail.com
+# EMAIL_PASS=tu_token_o_contraseña
+load_dotenv()
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
 
 # ----------------------------------------------------------------------
 # CONFIGURACIÓN
 # ----------------------------------------------------------------------
-
-# Para que la interfaz ocupe toda la pantalla
-st.set_page_config(layout='centered')   
+st.set_page_config(layout='centered')
 
 CSV_PATH = "src/logs/predicciones_xgboost.csv"
-MAPA_PATH = "src/fotos/ParteDeArriba.png"
+MAPA_PATH = "src/fotos/ParteDeAbajo.png"
+ACTIONS_PATH = "src/logs/acciones_detectadas.csv"
 
 TIEMPO_VISIBLE_TRANSICIONES = 10  # segundos que se ven las líneas de transición
 transiciones = []
 ultima_habitacion = None
 ultima_posicion = None
 
-# Diccionario de posiciones ESP32
+# ESP_POSICIONES = {
+#     "ESP32_1": (100, 360),
+#     "ESP32_2": (100, 550),
+#     "ESP32_3": (300, 283),
+#     "ESP32_4": (50, 40),
+#     "ESP32_5": (50, 200),
+#     "ESP32_6": (300, 40),
+#     "ESP32_7": (550, 550),
+#     "ESP32_8": (750, 430),
+#     "ESP32_9": (550, 150),
+#     "ESP32_10": (990, 290),
+# }
+
 ESP_POSICIONES = {
-    "ESP32_1": (100, 360),
-    "ESP32_2": (100, 550),
-    "ESP32_3": (300, 283),
-    "ESP32_4": (50, 40),
-    "ESP32_5": (50, 200),
-    "ESP32_6": (300, 40),
-    "ESP32_7": (550, 550),
-    "ESP32_8": (750, 430),
-    "ESP32_9": (550, 150),
-    "ESP32_10": (990, 290),
+    "ESP32_1": (200, 650),
+    "ESP32_2": (220, 25),
+    "ESP32_3": (170, 220),
+    "ESP32_4": (790, 650),
+    "ESP32_5": (520, 520),
+    "ESP32_6": (1350, 25),
+    "ESP32_7": (150000, 50050),
+    "ESP32_8": (1200, 240),
+    "ESP32_9": (200, 420),
+    "ESP32_10": (1020, 650),
 }
+ #ARRIBA
+# POSICIONES = {
+#     "Cocina_Fregadero":      (70, 70),
+#     "Cocina_Vitro":          (70, 200),
+#     "Cocina_Frigorifico":    (320, 65),
+#     "Salon_Mesa":            (600, 150),
+#     "Salon_Sofa":            (900, 275),
+#     "Dormitorio_Cama":       (100, 525),
+#     "Dormitorio_Escritorio": (100, 400),
+#     "Baño_Lavabo":           (550, 500),
+#     "Baño_WC":               (900, 430),
+#     "Pasillo_Pasillo":       (300, 285),
+# }
 
-# Diccionario para dibujar la posición estable en el mapa
+# ABAJO
 POSICIONES = {
-    "Cocina_Fregadero":      (70, 70),
-    "Cocina_Vitro":          (70, 200),
-    "Cocina_Frigorifico":    (320, 65),
+    "Cocina_Fregadero":      (230, 50),
+    "Cocina_Vitroceramica":          (220, 45),
+    "Cocina_Frigorifico":    (120, 220),
     "Salon_Mesa":            (600, 150),
-    "Salon_Sofa":            (900, 275),
-    "Dormitorio_Cama":       (100, 525),
+    "Salon_Sofa":            (740, 635),
+    "Dormitorio_Cama":       (200, 635),
     "Dormitorio_Escritorio": (100, 400),
-    "Baño_Lavabo":           (550, 500),
-    "Baño_WC":               (900, 430),
-    "Pasillo_Pasillo":       (300, 285),
+    "Baño_Lavabo":           (1330, 45),
+    "Baño_WC":               (1100, 230),
 }
-
-# Mapa de posición a habitación (para el dibujo, no imprescindible)
-POSICION_A_HABITACION = {
-    "Fregadero":   "Cocina",
-    "Vitro":       "Cocina",
-    "Frigorifico": "Cocina",
-    "Mesa":        "Salon",
-    "Sofa":        "Salon",
-    "Cama":        "Dormitorio",
-    "Escritorio":  "Dormitorio",
-    "Lavabo":      "Baño",
-    "WC":          "Baño",
-    "Pasillo":     "Pasillo"
-}
-
-# ----------------------------------------------------------------------
-# FILTRO DE OUTLIERS (Combinaciones válidas)
-# ----------------------------------------------------------------------
 VALID_POSITIONS_BY_ROOM = {
     "Dormitorio":   ["Cama", "Escritorio"],
-    "Cocina":       ["Vitro", "Frigorifico", "Fregadero"],
+    "Cocina":       ["Vitroceramica", "Frigorifico", "Fregadero"],
     "Salon":        ["Mesa", "Sofa"],
     "Baño":         ["WC", "Lavabo"],
     "Pasillo":      ["Pasillo"]
 }
 
 # ----------------------------------------------------------------------
+# INICIALIZAR session_state
+# ----------------------------------------------------------------------
+if 'last_alarm_shown' not in st.session_state:
+    st.session_state['last_alarm_shown'] = {}
+if "alert_email" not in st.session_state:
+    st.session_state["alert_email"] = ""
+if "alarmas_configuradas" not in st.session_state:
+    st.session_state["alarmas_configuradas"] = False
+
+# ----------------------------------------------------------------------
 # FUNCIONES AUXILIARES
 # ----------------------------------------------------------------------
 def format_timedelta(td):
-    """Devuelve un string HH:MM:SS a partir de un pandas.Timedelta."""
-    total_segundos = int(td.total_seconds())
-    horas = total_segundos // 3600
-    minutos = (total_segundos % 3600) // 60
-    segundos = total_segundos % 60
-    return f"{horas:02d}:{minutos:02d}:{segundos:02d}"
+    total = int(td.total_seconds())
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 def obtener_ultimas_filas_csv(n=5):
-    """Devuelve las últimas n filas del CSV (sin filtrar Duda/outliers)."""
     try:
         df = pd.read_csv(CSV_PATH)
-        if not df.empty:
-            return df.tail(n)
-        return pd.DataFrame()
+        return df.tail(n) if not df.empty else pd.DataFrame()
     except Exception as e:
         st.error(f"Error al leer el CSV: {e}")
         return pd.DataFrame()
 
 def obtener_3_filas_validas():
-    """
-    Devuelve las 2 últimas filas que NO tengan 'Duda' (ni en habitacion ni en posicion).
-    Si no hay 2 válidas, retorna None.
-
-    (A pesar del nombre '3_filas_validas', aquí en tu código
-     realmente se piden 2 últimas filas válidas consecutivas).
-    """
     try:
         df = pd.read_csv(CSV_PATH)
-        df = df[
-            (df["habitacion_predicha"] != "Duda") &
-            (df["posicion_predicha"]   != "Duda")
-        ]
-        # Además, filtramos outliers (combinaciones imposibles)
+        df = df[(df["habitacion_predicha"]!="Duda") & (df["posicion_predicha"]!="Duda")]
         df = df[df.apply(
-            lambda row: row["posicion_predicha"] in VALID_POSITIONS_BY_ROOM.get(row["habitacion_predicha"], []),
+            lambda r: r["posicion_predicha"] in VALID_POSITIONS_BY_ROOM.get(r["habitacion_predicha"], []),
             axis=1
         )]
-        if df.empty:
-            return None
-
-        ultimas_2 = df.tail(2)
-        if len(ultimas_2) < 2:
-            return None
-        return ultimas_2
+        ult2 = df.tail(2)
+        return ult2 if len(ult2)==2 else None
     except Exception as e:
         st.error(f"Error al leer el CSV: {e}")
         return None
 
 def dibujar_esps(draw, fila):
-    """Dibuja cada ESP32 con un color en función del RSSI."""
-    for esp, (x, y) in ESP_POSICIONES.items():
+    for esp,(x,y) in ESP_POSICIONES.items():
         if esp in fila:
             rssi = fila[esp]
-            # Verde si rssi >= -75, amarillo entre -95 y -76, rojo menos de -95
-            color = "green" if rssi >= -75 else "yellow" if -95 <= rssi <= -76 else "red"
-            r = 6
-            draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
+            color = "green" if rssi>=-75 else "yellow" if rssi>=-95 else "red"
+            draw.ellipse((x-6,y-6,x+6,y+6), fill=color)
 
-def dibujar_transiciones(base_image):
-    """
-    Dibuja líneas de transición que desaparecen tras TIEMPO_VISIBLE_TRANSICIONES.
-    """
-    overlay = Image.new("RGBA", base_image.size, (255, 255, 255, 0))
-    draw_overlay = ImageDraw.Draw(overlay)
-
+def dibujar_transiciones(img):
+    overlay = Image.new("RGBA", img.size, (255,255,255,0))
+    od = ImageDraw.Draw(overlay)
     now = time.time()
-    for (x1, y1, x2, y2, t) in list(transiciones):
-        elapsed = now - t
-        if elapsed > TIEMPO_VISIBLE_TRANSICIONES:
-            transiciones.remove((x1, y1, x2, y2, t))
+    for x1,y1,x2,y2,t in list(transiciones):
+        e = now - t
+        if e>TIEMPO_VISIBLE_TRANSICIONES:
+            transiciones.remove((x1,y1,x2,y2,t))
             continue
-
-        # Opacidad decrece en la segunda mitad del tiempo
-        if elapsed < TIEMPO_VISIBLE_TRANSICIONES / 2:
-            alpha = 255
-        else:
-            factor = 1 - (elapsed - (TIEMPO_VISIBLE_TRANSICIONES / 2)) / (TIEMPO_VISIBLE_TRANSICIONES / 2)
-            alpha = int(255 * factor)
-
-        color = (255, 0, 0, alpha)
-        draw_overlay.line([(x1, y1), (x2, y2)], fill=color, width=3)
-
-    return Image.alpha_composite(base_image, overlay)
+        alpha = 255 if e< TIEMPO_VISIBLE_TRANSICIONES/2 else int(255*(1-(e-TIEMPO_VISIBLE_TRANSICIONES/2)/(TIEMPO_VISIBLE_TRANSICIONES/2)))
+        od.line([(x1,y1),(x2,y2)], fill=(255,0,0,alpha), width=3)
+    return Image.alpha_composite(img, overlay)
 
 def dibujar_grafico_rssi(fila):
-    """Bar chart con los RSSI de la última fila."""
-    if fila.empty:
-        return None
-
-    rssi_values = {}
-    for esp in fila.index:
-        if "ESP32_" in esp:
-            val = fila[esp]
-            val = max(val, -100)  # límite inferior
-            rssi_values[esp] = 100 + val  # shift para que -100 -> 0
-
-    fig, ax = plt.subplots(figsize=(8, 2.5))
-    ax.bar(rssi_values.keys(), rssi_values.values(), color='blue')
-    ax.set_xlabel("ESP32")
-    ax.set_ylabel("Intensidad RSSI (dBm)")
-    ax.set_title("Intensidad de señal de ESP32 en tiempo real")
-    ax.set_ylim(0, 100)
-
-    # Se definen primero los 'ticks' de forma explícita,
-    # y luego las etiquetas para evitar el warning de Matplotlib
-    x_positions = range(len(rssi_values.keys()))
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(rssi_values.keys(), rotation=45)
-
+    if fila.empty: return None
+    vals = {esp:100+max(v,-100) for esp,v in fila.items() if esp.startswith("ESP32_")}
+    fig,ax = plt.subplots(figsize=(8,2.5))
+    ax.bar(vals.keys(), vals.values())
+    ax.set_ylim(0,100); ax.set_ylabel("RSSI (dBm)"); ax.set_title("Señal ESP32")
+    ax.set_xticks(range(len(vals))); ax.set_xticklabels(vals.keys(), rotation=45)
     ax.grid(axis="y", linestyle="--", alpha=0.7)
     return fig
 
 def posicion_estable():
-    """
-    Revisa las últimas filas válidas (sin 'Duda' ni outliers).
-    Si las 2 últimas coinciden en habitacion_predicha y posicion_predicha,
-    devolvemos (habitacion, posicion).
-    """
-    validas = obtener_3_filas_validas()
-    if validas is None:
-        return None
-
-    habs = validas["habitacion_predicha"].unique()
-    poss = validas["posicion_predicha"].unique()
-    if len(habs) == 1 and len(poss) == 1:
-        return (habs[0], poss[0])
-    return None
+    v = obtener_3_filas_validas()
+    if v is None: return None
+    h = v["habitacion_predicha"].unique()
+    p = v["posicion_predicha"].unique()
+    return (h[0],p[0]) if len(h)==1 and len(p)==1 else None
 
 def dibujar_mapa(fila):
-    """
-    Dibuja el mapa con la última posición estable (si la hay).
-    """
     global ultima_habitacion, ultima_posicion, transiciones
-
-    base_img = Image.open(MAPA_PATH).convert("RGBA")
-    draw = ImageDraw.Draw(base_img)
-
-    # Dibuja ESPs
-    dibujar_esps(draw, fila)
-
-    # Averigua posición estable
-    nueva_pos = posicion_estable()
-    old_hab, old_pos = ultima_habitacion, ultima_posicion
-
-    if nueva_pos is not None:
-        ultima_habitacion, ultima_posicion = nueva_pos
-
-    # Obtiene coords
+    img = Image.open(MAPA_PATH).convert("RGBA")
+    d = ImageDraw.Draw(img)
+    dibujar_esps(d, fila)
+    nueva = posicion_estable()
+    old_hab,old_pos = ultima_habitacion,ultima_posicion
+    if nueva:
+        ultima_habitacion,ultima_posicion = nueva
     if ultima_habitacion and ultima_posicion:
-        coords = POSICIONES.get(f"{ultima_habitacion}_{ultima_posicion}", (0, 0))
+        coords = POSICIONES.get(f"{ultima_habitacion}_{ultima_posicion}",(0,0))
     else:
-        coords = (0, 0)
-
-    # Transición si hay cambio
-    if coords != (0, 0) and old_hab and old_pos:
-        old_coords = POSICIONES.get(f"{old_hab}_{old_pos}", (0, 0))
-        if old_coords != (0, 0) and old_coords != coords:
-            transiciones.append((*old_coords, coords[0], coords[1], time.time()))
-
-    # Dibuja punto azul
-    if coords != (0, 0):
-        r = 14
-        x, y = coords
-        draw.ellipse([x - r, y - r, x + r, y + r], fill="blue")
-
-    return dibujar_transiciones(base_img)
+        coords = (0,0)
+    if coords!=(0,0) and old_hab and old_pos:
+        o = POSICIONES.get(f"{old_hab}_{old_pos}",(0,0))
+        if o!=(0,0) and o!=coords:
+            transiciones.append((*o,coords[0],coords[1],time.time()))
+    if coords!=(0,0):
+        x,y = coords; r=14
+        d.ellipse([x-r,y-r,x+r,y+r], fill="blue")
+    return dibujar_transiciones(img)
 
 # ----------------------------------------------------------------------
-# FUNCIÓN PARA GENERAR INTERVALOS
+# GENERACIÓN DE INTERVALOS (igual que antes)
 # ----------------------------------------------------------------------
 def generar_intervalos_separados(CSV_PATH, dt_inicio, dt_fin, min_filas=3):
-    """
-    Devuelve dos DataFrames:
-      1) df_posiciones: intervalos agrupados consecutivamente por (Habitación, Posición).
-         *Solo* se considera válido un intervalo si contiene >= min_filas consecutivas.
-      2) df_habitaciones: intervalos agrupados consecutivamente por Habitación (a partir de los intervalos válidos).
-    """
-
-    # 1) Leemos el CSV y parseamos tiempos
     df = pd.read_csv(CSV_PATH)
     df["time"] = pd.to_datetime(df["time"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
     df.dropna(subset=["time"], inplace=True)
+    df = df[(df["habitacion_predicha"]!="Duda") & (df["posicion_predicha"]!="Duda")]
+    df = df[df.apply(lambda r: r["posicion_predicha"] in VALID_POSITIONS_BY_ROOM.get(r["habitacion_predicha"], []), axis=1)]
+    df.sort_values("time", inplace=True); df.reset_index(drop=True, inplace=True)
 
-    # 2) Quitamos "Duda" y outliers
-    df = df[
-        (df["habitacion_predicha"] != "Duda") &
-        (df["posicion_predicha"]   != "Duda")
-    ]
-    df = df[
-        df.apply(
-            lambda row: row["posicion_predicha"] 
-                        in VALID_POSITIONS_BY_ROOM.get(row["habitacion_predicha"], []),
-            axis=1
-        )
-    ]
-
-    # 3) Ordenamos por tiempo
-    df.sort_values(by="time", inplace=True)
-    df.reset_index(drop=True, inplace=True)
-
-    # --------------------------------------------------------------------
-    # CREAR INTERVALOS POR (Habitación, Posición) CON >= min_filas CONSECUTIVAS
-    # --------------------------------------------------------------------
     intervalos = []
-
-    clave_actual = None
-    inicio_actual = None
-    # Contador de filas consecutivas con la misma clave
-    count_consecutivo = 0
-
-    for i, row in df.iterrows():
-        hab = row["habitacion_predicha"]
-        pos = row["posicion_predicha"]
-        t   = row["time"]
-
-        clave = (hab, pos)
-
-        # Si es la primera fila
-        if clave_actual is None:
-            clave_actual = clave
-            inicio_actual = t
-            count_consecutivo = 1
+    clave,inicio,count = None,None,0
+    for _,row in df.iterrows():
+        hab,pos,t = row["habitacion_predicha"],row["posicion_predicha"],row["time"]
+        key = (hab,pos)
+        if clave is None:
+            clave,inicio,count = key,t,1
+        elif key==clave:
+            count+=1
         else:
-            if clave == clave_actual:
-                # Seguimos en la misma combinación
-                count_consecutivo += 1
-            else:
-                # Ha cambiado la combinación
-                # Comprobamos si el bloque anterior cumplía el mínimo
-                if count_consecutivo >= min_filas:
-                    # Lo registramos
-                    h_prev, p_prev = clave_actual
-                    intervalos.append({
-                        "Habitacion":      h_prev,
-                        "Posicion":        p_prev,
-                        "Fecha_Entrada_dt": inicio_actual,
-                        "Fecha_Salida_dt":  t
-                    })
+            if count>=min_filas:
+                intervalos.append({"Habitacion":clave[0],"Posicion":clave[1],
+                                   "Fecha_Entrada_dt":inicio,"Fecha_Salida_dt":t})
+            clave,inicio,count = key,t,1
+    if clave and count>=min_filas:
+        tfin = df["time"].iloc[-1]
+        intervalos.append({"Habitacion":clave[0],"Posicion":clave[1],
+                           "Fecha_Entrada_dt":inicio,"Fecha_Salida_dt":tfin})
 
-                # Empezamos un nuevo bloque
-                clave_actual = clave
-                inicio_actual = t
-                count_consecutivo = 1
+    df_pos = pd.DataFrame(intervalos)
+    if df_pos.empty: return pd.DataFrame(),pd.DataFrame()
+    mask = (df_pos["Fecha_Salida_dt"]>=dt_inicio)&(df_pos["Fecha_Entrada_dt"]<=dt_fin)
+    df_pos = df_pos[mask].copy()
+    df_pos["Fecha_Entrada_dt"]=df_pos["Fecha_Entrada_dt"].clip(lower=dt_inicio,upper=dt_fin)
+    df_pos["Fecha_Salida_dt"]=df_pos["Fecha_Salida_dt"].clip(lower=dt_inicio,upper=dt_fin)
+    df_pos["Tiempo_en_la_posicion_td"]=df_pos["Fecha_Salida_dt"]-df_pos["Fecha_Entrada_dt"]
+    df_pos.reset_index(drop=True,inplace=True)
 
-    # Al terminar el bucle, cerramos el último bloque
-    if clave_actual is not None and inicio_actual is not None:
-        if count_consecutivo >= min_filas:
-            h_prev, p_prev = clave_actual
-            t_fin_csv = df["time"].iloc[-1]
-            intervalos.append({
-                "Habitacion":      h_prev,
-                "Posicion":        p_prev,
-                "Fecha_Entrada_dt": inicio_actual,
-                "Fecha_Salida_dt":  t_fin_csv
-            })
+    # Agrupar por habitación...
+    chunks=[]; start=0; hab=df_pos.loc[0,"Habitacion"]; ts=df_pos.loc[0,"Fecha_Entrada_dt"]
+    for i in range(1,len(df_pos)):
+        if df_pos.loc[i,"Habitacion"]!=hab:
+            te=df_pos.loc[i-1,"Fecha_Salida_dt"]
+            chunks.append((start,i-1,hab,ts,te))
+            start,hab,ts = i,df_pos.loc[i,"Habitacion"],df_pos.loc[i,"Fecha_Entrada_dt"]
+    te=df_pos.loc[len(df_pos)-1,"Fecha_Salida_dt"]
+    chunks.append((start,len(df_pos)-1,hab,ts,te))
 
-    # Convertimos intervalos a DataFrame
-    df_posiciones = pd.DataFrame(intervalos)
-    if df_posiciones.empty:
-        # Devuelve vacío si nada cumplió el mínimo
-        return pd.DataFrame(), pd.DataFrame()
+    lista_hab=[]
+    for a,b,h,stt,ett in chunks:
+        lista_hab.append({"Habitacion":h,
+                          "Fecha_Entrada_dt":stt,
+                          "Fecha_Salida_dt":ett,
+                          "Tiempo_en_la_habitacion_td":ett-stt})
+    df_hab = pd.DataFrame(lista_hab)
+    if df_hab.empty: return df_pos, pd.DataFrame()
 
-    # 4) Filtramos por [dt_inicio, dt_fin] y recortamos
-    mask = (df_posiciones["Fecha_Salida_dt"]   >= dt_inicio) & \
-           (df_posiciones["Fecha_Entrada_dt"] <= dt_fin)
-    df_posiciones = df_posiciones[mask].copy()
-    df_posiciones["Fecha_Entrada_dt"] = df_posiciones["Fecha_Entrada_dt"].clip(
-        lower=dt_inicio, 
-        upper=dt_fin
-    )
-    df_posiciones["Fecha_Salida_dt"]  = df_posiciones["Fecha_Salida_dt"].clip(
-        lower=dt_inicio, 
-        upper=dt_fin
-    )
+    # Formateo de salida
+    df_pos["Fecha_Entrada"]=df_pos["Fecha_Entrada_dt"].dt.strftime("%d/%m/%y %H:%M:%S")
+    df_pos["Fecha_Salida"]=df_pos["Fecha_Salida_dt"].dt.strftime("%d/%m/%Y %H:%M:%S")
+    df_pos["Tiempo_en_la_posicion"]=df_pos["Tiempo_en_la_posicion_td"].apply(format_timedelta)
+    df_pos = df_pos[["Habitacion","Posicion","Fecha_Entrada","Fecha_Salida","Tiempo_en_la_posicion"]]
 
-    # Añadimos columna "Tiempo_en_la_posicion_td"
-    df_posiciones["Tiempo_en_la_posicion_td"] = (
-        df_posiciones["Fecha_Salida_dt"] - df_posiciones["Fecha_Entrada_dt"]
-    )
+    df_hab["Fecha_Entrada"]=df_hab["Fecha_Entrada_dt"].dt.strftime("%d/%m/%y %H:%M:%S")
+    df_hab["Fecha_Salida"]=df_hab["Fecha_Salida_dt"].dt.strftime("%d/%m/%y %H:%M:%S")
+    df_hab["Tiempo_en_la_habitacion"]=df_hab["Tiempo_en_la_habitacion_td"].apply(format_timedelta)
+    df_hab = df_hab[["Habitacion","Fecha_Entrada","Fecha_Salida","Tiempo_en_la_habitacion"]]
 
-    # --------------------------------------------------------------------
-    # AGRUPAR ESOS INTERVALOS POR HABITACIÓN (CONSECUTIVOS)
-    # --------------------------------------------------------------------
-    df_posiciones.reset_index(drop=True, inplace=True)
-
-    if df_posiciones.empty:
-        # Si después del filtro por fecha queda vacío, terminamos
-        return pd.DataFrame(), pd.DataFrame()
-
-    chunks = []
-    chunk_start_idx = 0
-    hab_actual = df_posiciones.loc[0, "Habitacion"]
-    hab_chunk_start = df_posiciones.loc[0, "Fecha_Entrada_dt"]
-
-    for i in range(1, len(df_posiciones)):
-        row_hab = df_posiciones.loc[i, "Habitacion"]
-        if row_hab != hab_actual:
-            # Cerramos chunk anterior
-            hab_chunk_end = df_posiciones.loc[i-1, "Fecha_Salida_dt"]
-            chunks.append((chunk_start_idx, i-1, hab_actual, hab_chunk_start, hab_chunk_end))
-
-            # Empezamos uno nuevo
-            chunk_start_idx = i
-            hab_actual = row_hab
-            hab_chunk_start = df_posiciones.loc[i, "Fecha_Entrada_dt"]
-
-    # Cerrar último chunk
-    hab_chunk_end = df_posiciones.loc[len(df_posiciones)-1, "Fecha_Salida_dt"]
-    chunks.append((chunk_start_idx, len(df_posiciones)-1, hab_actual, hab_chunk_start, hab_chunk_end))
-
-    # Construimos df_habitaciones
-    lista_hab = []
-    for (start_i, end_i, hab, c_start_dt, c_end_dt) in chunks:
-        lista_hab.append({
-            "Habitacion": hab,
-            "Fecha_Entrada_dt": c_start_dt,
-            "Fecha_Salida_dt":  c_end_dt,
-            "Tiempo_en_la_habitacion_td": c_end_dt - c_start_dt
-        })
-
-    df_habitaciones = pd.DataFrame(lista_hab)
-    if df_habitaciones.empty:
-        return df_posiciones, pd.DataFrame()
-
-    # --------------------------------------------------------------------
-    # FORMATEO FINAL (columnas de texto)
-    # --------------------------------------------------------------------
-    # df_posiciones
-    df_posiciones["Fecha_Entrada"] = df_posiciones["Fecha_Entrada_dt"].dt.strftime("%d/%m/%y %H:%M:%S")
-    df_posiciones["Fecha_Salida"]  = df_posiciones["Fecha_Salida_dt"].dt.strftime("%d/%m/%Y %H:%M:%S")
-
-    df_posiciones["Tiempo_en_la_posicion"] = df_posiciones["Tiempo_en_la_posicion_td"].apply(
-        lambda td: format_timedelta(td) if pd.notnull(td) else ""
-    )
-
-    df_posiciones = df_posiciones[[
-        "Habitacion",
-        "Posicion",
-        "Fecha_Entrada",
-        "Fecha_Salida",
-        "Tiempo_en_la_posicion"
-    ]]
-
-    # df_habitaciones
-    df_habitaciones["Fecha_Entrada"] = df_habitaciones["Fecha_Entrada_dt"].dt.strftime("%d/%m/%y %H:%M:%S")
-    df_habitaciones["Fecha_Salida"]  = df_habitaciones["Fecha_Salida_dt"].dt.strftime("%d/%m/%y %H:%M:%S")
-    df_habitaciones["Tiempo_en_la_habitacion"] = df_habitaciones["Tiempo_en_la_habitacion_td"].apply(
-        lambda td: format_timedelta(td) if pd.notnull(td) else ""
-    )
-
-    df_habitaciones = df_habitaciones[[
-        "Habitacion",
-        "Fecha_Entrada",
-        "Fecha_Salida",
-        "Tiempo_en_la_habitacion"
-    ]]
-
-    return df_posiciones, df_habitaciones
+    return df_pos, df_hab
 
 # ----------------------------------------------------------------------
-# AÑADIMOS FUNCIÓN PARA COMPROBAR ALARMAS
+# ENVÍO DE EMAIL
 # ----------------------------------------------------------------------
-# Añadir esta función al principio (sin cambiar lo demás)
+def enviar_email(mensaje, destino):
+    if not destino: return
+    msg = MIMEText(f"Alerta generada:\n\n{mensaje}")
+    msg['Subject'] = f"[IndoorPositioning] Alerta: {mensaje}"
+    msg['From'] = EMAIL_USER
+    msg['To'] = destino
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.ehlo()
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.send_message(msg)
+        server.quit()
+    except Exception as e:
+        st.error(f"Error al enviar email: {e}")
+
+# ----------------------------------------------------------------------
+# LÓGICA DE ALARMAS
+# ----------------------------------------------------------------------
 def lanzar_alarma(mensaje):
-    js_code = f"<script>alert('Localhost dice: Alarma: {mensaje}');</script>"
-    current_time = time.time()
-    last_alarm = st.session_state.get('last_alarm_time', 0)
-
-    if current_time - last_alarm > 60:
-        st.components.v1.html(js_code)
-        st.session_state['last_alarm_time'] = current_time
-
-# Al principio del script inicializa session_state
-if 'last_alarm_time' not in st.session_state:
-    st.session_state['last_alarm_time'] = 0
-
-# Modifica solo esta función en tu código:
-def comprobar_alarmas():
-    """
-    Comprueba las alarmas definidas (hora límite salida Dormitorio,
-    hora límite entrada Dormitorio y tiempo máximo en Baño),
-    basándose en la posición estable (sin 'Duda') y la hora actual.
-    """
-
-    pos_estable = posicion_estable()
-    if pos_estable is None:
+    key = f"alert_sent_{mensaje}"
+    if st.session_state['last_alarm_shown'].get(key, False):
         return
+    components.html(f"<script>alert('Alerta: {mensaje}');</script>")
+    enviar_email(mensaje, st.session_state.get("alert_email"))
+    st.session_state['last_alarm_shown'][key] = True
 
-    habitacion, _ = pos_estable
-
+def comprobar_alarmas():
+    if not st.session_state["alarmas_configuradas"]:
+        return
+    pe = posicion_estable()
+    if not pe: return
+    hab,_ = pe
     ahora = datetime.datetime.now().time()
-    hora_lim_salida = st.session_state.get("hora_limite_salida_dormitorio", datetime.time(9, 0, 0))
-    hora_lim_entrada = st.session_state.get("hora_limite_entrada_dormitorio", datetime.time(23, 0, 0))
-    tiempo_lim_bano = st.session_state.get("tiempo_limite_bano", 15)
-
-    # ALARMA 1: No se ha levantado (pasa de la hora limite de salida y sigue en Dormitorio)
-    if ahora > hora_lim_salida and pos_estable[0] == "Dormitorio":
-        lanzar_alarma("¡No se ha levantado, va llegar tarde!")
-
-    # ALARMA 2: Aún no se ha acostado
-    if ahora > hora_lim_entrada and pos_estable[0] != "Dormitorio":
+    hs = st.session_state.get("hora_limite_salida_dormitorio", datetime.time(9,0))
+    he = st.session_state.get("hora_limite_entrada_dormitorio", datetime.time(23,0))
+    tb = st.session_state.get("tiempo_limite_bano", 15)
+    if ahora>hs and hab=="Dormitorio":
+        lanzar_alarma("¡No se ha levantado, va a llegar tarde!")
+    if ahora>he and hab!="Dormitorio":
         lanzar_alarma("¡Aún no se ha acostado!")
-
-    # ALARMA 3: Límite de tiempo en Baño
-    if pos_estable[0] == "Baño":
+    if hab=="Baño":
         if st.session_state["tiempo_entrada_bano"] is None:
             st.session_state["tiempo_entrada_bano"] = datetime.datetime.now()
         else:
-            tiempo_en_bano = (datetime.datetime.now() - st.session_state["tiempo_entrada_bano"]).total_seconds() / 60.0
-            if tiempo_en_bano > tiempo_lim_bano:
+            m = (datetime.datetime.now() - st.session_state["tiempo_entrada_bano"]).total_seconds()/60
+            if m>tb:
                 lanzar_alarma("¡Lleva demasiado tiempo en el baño!")
     else:
         st.session_state["tiempo_entrada_bano"] = None
+
 # ----------------------------------------------------------------------
 # STREAMLIT APP
 # ----------------------------------------------------------------------
-# Inicializamos ciertas variables en session_state si no existen
 if "hora_limite_salida_dormitorio" not in st.session_state:
-    st.session_state["hora_limite_salida_dormitorio"] = datetime.time(9, 0, 0)
+    st.session_state["hora_limite_salida_dormitorio"] = datetime.time(9,0)
 if "hora_limite_entrada_dormitorio" not in st.session_state:
-    st.session_state["hora_limite_entrada_dormitorio"] = datetime.time(23, 0, 0)
+    st.session_state["hora_limite_entrada_dormitorio"] = datetime.time(23,0)
 if "tiempo_limite_bano" not in st.session_state:
     st.session_state["tiempo_limite_bano"] = 15
 if "tiempo_entrada_bano" not in st.session_state:
     st.session_state["tiempo_entrada_bano"] = None
-if "mostrar_alarmas" not in st.session_state:
-    st.session_state["mostrar_alarmas"] = False
 
 st.title("Posicionamiento Indoor")
 st.write("Visualización en tiempo real con tiempos de posición y habitación.")
 
-# Botón para mostrar/ocultar configuración de alarmas
 if st.button("ALARMAS"):
-    st.session_state["mostrar_alarmas"] = not st.session_state["mostrar_alarmas"] 
+    st.session_state["mostrar_alarmas"] = not st.session_state.get("mostrar_alarmas", False)
 
-
-# Si se ha pulsado el botón, mostramos el formulario de configuración
-if st.session_state["mostrar_alarmas"]:
+if st.session_state.get("mostrar_alarmas", False):
     st.subheader("Configuración de ALARMAS")
-    st.write("Establece aquí las horas límite y el tiempo máximo en el baño:")
-
-    # --- Iniciamos el formulario ---
+    st.write("Establece horas límite, tiempo en baño y email para alertas:")
     with st.form("form_alarmas"):
-        nueva_hora_salida = st.time_input(
-            "Hora límite para SALIR del dormitorio (levantarse)",
-            value=st.session_state["hora_limite_salida_dormitorio"]
-        )
-        nueva_hora_entrada = st.time_input(
-            "Hora límite para ENTRAR al dormitorio (acostarse)",
-            value=st.session_state["hora_limite_entrada_dormitorio"]
-        )
-        nuevo_tiempo_bano = st.number_input(
-            "Tiempo máximo en el baño (minutos)",
-            min_value=1,
-            max_value=180,
-            value=st.session_state["tiempo_limite_bano"]
-        )
+        hs = st.time_input("Hora límite SALIR dormitorio", value=st.session_state["hora_limite_salida_dormitorio"])
+        he = st.time_input("Hora límite ENTRAR dormitorio", value=st.session_state["hora_limite_entrada_dormitorio"])
+        tb = st.number_input("Tiempo máximo en baño (min)", min_value=1, max_value=180, value=st.session_state["tiempo_limite_bano"])
+        email = st.text_input("Email para recibir alertas", value=st.session_state["alert_email"])
+        if st.form_submit_button("Guardar alarmas"):
+            st.session_state["hora_limite_salida_dormitorio"] = hs
+            st.session_state["hora_limite_entrada_dormitorio"] = he
+            st.session_state["tiempo_limite_bano"] = tb
+            st.session_state["alert_email"] = email
+            st.session_state["alarmas_configuradas"] = True
+            st.success("¡Alarmas guardadas!")
 
-        # Botón dentro del formulario para guardar
-        submitted = st.form_submit_button("Guardar alarmas")
-
-        if submitted:
-            st.session_state["hora_limite_salida_dormitorio"] = nueva_hora_salida
-            st.session_state["hora_limite_entrada_dormitorio"] = nueva_hora_entrada
-            st.session_state["tiempo_limite_bano"] = nuevo_tiempo_bano
-            st.success("¡Nuevas alarmas guardadas!")
-
-# Creamos columnas para el mapa y la parte de descargas
 col_left, col_right = st.columns([3,1])
-
 with col_right:
     st.subheader("Descargar intervalos con tiempos")
-
-    fecha_inicio = st.date_input("Fecha inicio", value=datetime.date(2025, 2, 4))
-    hora_inicio = st.time_input("Hora inicio", value=datetime.time(0, 0, 0))
-    dt_inicio = datetime.datetime.combine(fecha_inicio, hora_inicio)
-
-    fecha_fin = st.date_input("Fecha fin", value=datetime.date(2025, 2, 4))
-    hora_fin = st.time_input("Hora fin", value=datetime.time(23, 59, 59))
-    dt_fin = datetime.datetime.combine(fecha_fin, hora_fin)
-
+    fi = st.date_input("Fecha inicio")
+    hi = st.time_input("Hora inicio", value=datetime.time(0,0))
+    dt_i = datetime.datetime.combine(fi,hi)
+    ff = st.date_input("Fecha fin")
+    hf = st.time_input("Hora fin", value=datetime.time(23,59,59))
+    dt_f = datetime.datetime.combine(ff,hf)
     if st.button("Guardar archivo"):
         try:
-            df_pos, df_hab = generar_intervalos_separados(CSV_PATH, dt_inicio, dt_fin)
+            df_pos, df_hab = generar_intervalos_separados(CSV_PATH, dt_i, dt_f)
             if df_pos.empty and df_hab.empty:
-                st.warning("No se han encontrado intervalos válidos en ese rango.")
+                st.warning("No hay intervalos válidos en ese rango.")
             else:
-                # Guardar df_pos en un Excel
-                output_pos = io.BytesIO()
-                with pd.ExcelWriter(output_pos, engine='xlsxwriter') as writer:
-                    df_pos.to_excel(writer, index=False, sheet_name="Intervalos")
-                output_pos.seek(0)
+                buf1 = io.BytesIO()
+                with pd.ExcelWriter(buf1, engine='xlsxwriter') as w:
+                    df_pos.to_excel(w, index=False, sheet_name="Intervalos")
+                buf1.seek(0)
+                st.download_button("Descargar Excel posiciones", data=buf1,
+                                   file_name="intervalos_posiciones.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                buf2 = io.BytesIO()
+                with pd.ExcelWriter(buf2, engine='xlsxwriter') as w:
+                    df_hab.to_excel(w, index=False, sheet_name="Habitaciones")
+                buf2.seek(0)
+                st.download_button("Descargar Excel habitaciones", data=buf2,
+                                   file_name="intervalos_habitaciones.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-                st.download_button(
-                    label="Descargar Excel posiciones",
-                    data=output_pos,
-                    file_name="intervalos_posiciones.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                df_acc = pd.read_csv(
+                    ACTIONS_PATH,
+                    parse_dates=[['Fecha','Hora']],
+                    dayfirst=True,              # porque tu formato es DD/MM/YYYY
+                    encoding='utf-8'
                 )
+                # renombramos la columna Fecha_Hora a time para homogeneidad
+                df_acc.rename(columns={'Fecha_Hora':'time'}, inplace=True)
 
-                # Guardar df_hab en otro Excel
-                output_hab = io.BytesIO()
-                with pd.ExcelWriter(output_hab, engine='xlsxwriter') as writer:
-                    df_hab.to_excel(writer, index=False, sheet_name="Habitaciones")
-                output_hab.seek(0)
+                # 3.2) Filtramos en base al intervalo dt_i–dt_f
+                df_acc = df_acc[(df_acc['time'] >= dt_i) & (df_acc['time'] <= dt_f)]
 
-                st.download_button(
-                    label="Descargar Excel Habitaciones",
-                    data=output_hab,
-                    file_name="intervalos_habitaciones.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                if df_acc.empty:
+                    st.warning("No hay acciones en ese rango.")
+                else:
+                    # extrae fecha y hora de la columna datetime
+                    df_acc['Fecha'] = df_acc['time'].dt.strftime('%d/%m/%Y')
+                    df_acc['Hora']   = df_acc['time'].dt.strftime('%H:%M:%S')
+
+                    # ahora incluimos Fecha y Hora junto a la Descripción
+                    df_desc = df_acc[['Descripción', 'Fecha', 'Hora']]
+
+                    # 3.4) Volcar a Excel y botón de descarga
+                    buf3 = io.BytesIO()
+                    with pd.ExcelWriter(buf3, engine='xlsxwriter') as w:
+                        df_desc.to_excel(w, index=False, sheet_name="Acciones")
+                    buf3.seek(0)
+                    st.download_button(
+                        "Descargar Excel acciones",
+                        data=buf3,
+                        file_name="acciones_intervalo.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
         except Exception as e:
-            st.error(f"Error al generar el Excel: {e}")
+            st.error(f"Error al generar Excel: {e}")
 
-mapa_placeholder = col_left.empty()
-grafico_placeholder = col_left.empty()
-tabla_placeholder = col_left.empty()
+mapa_ph = col_left.empty()
+graf_ph = col_left.empty()
+tab_ph  = col_left.empty()
 
-# Bucle "tiempo real" para refrescar:
 while True:
-    raw_data = obtener_ultimas_filas_csv(n=5)
-
-    if not raw_data.empty:
-        ultima_fila = raw_data.iloc[-1]
-        mapa = dibujar_mapa(ultima_fila)
-        mapa_placeholder.image(mapa, caption="Estado del posicionamiento", use_container_width=True)
-
-        grafico = dibujar_grafico_rssi(ultima_fila)
-        if grafico:
-            grafico_placeholder.pyplot(grafico)
-
-        tabla_placeholder.dataframe(raw_data)
+    data = obtener_ultimas_filas_csv(5)
+    if not data.empty:
+        last = data.iloc[-1]
+        mapa_ph.image(dibujar_mapa(last), use_container_width=True)
+        fig = dibujar_grafico_rssi(last)
+        if fig: graf_ph.pyplot(fig)
+        tab_ph.dataframe(data)
     else:
-        tabla_placeholder.dataframe(raw_data)
-
-    # Cada ciclo comprobamos si salta alguna alarma
+        tab_ph.dataframe(data)
     comprobar_alarmas()
-
-    # Pequeña pausa de 1 segundo para que no se dispare el bucle sin control
     time.sleep(1)
