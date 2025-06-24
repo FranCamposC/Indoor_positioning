@@ -107,10 +107,16 @@ def predict_position():
             try:
                 feature_columns = [col for col in df.columns if col.startswith('ESP32_')]
                 X = df[feature_columns]
+                
+                #Verifica que no esta fuera de la vivienda
+                if all(X.iloc[0][col] == -150 for col in feature_columns):
+                    predicted_habitacion_label = "Fuera de la vivienda"
+                    predicted_posicion_label = "Fuera de la vivienda"
+                else:
 
-                # Predicción habitación con probabilidades
-                prediction_habitacion_proba = model_habitacion.predict_proba(X)
-                max_proba_hab = prediction_habitacion_proba.max(axis=1)[0]
+                    # Predicción habitación con probabilidades
+                    prediction_habitacion_proba = model_habitacion.predict_proba(X)
+                    max_proba_hab = prediction_habitacion_proba.max(axis=1)[0]
 
                 if max_proba_hab >= umbral_confianza_habitacion:
                     # Confianza suficiente en la habitación

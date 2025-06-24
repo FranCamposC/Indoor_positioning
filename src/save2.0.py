@@ -1,139 +1,214 @@
-import paho.mqtt.client as mqtt
-import json
-import pandas as pd
 import os
+import json
 import threading
-import time
+import pandas as pd
+import paho.mqtt.client as mqtt
 
-# Configuración del broker MQTT
-MQTT_BROKER = "192.168.0.190" 
-MQTT_PORT = 1883
-MQTT_USER = "fran"
-MQTT_PASSWORD = "1234"
-MQTT_TOPIC = "receivers/#"  # Usar # para suscribirse a múltiples tópicos
+# --- 0. RUTAS ABSOLUTAS ---
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
+LOGS_DIR    = os.path.join(BASE_DIR, 'logs')
+CSV_FILE    = os.path.join(LOGS_DIR, 'datosparaEntrenar.csv')
 
-# Nombre del archivo CSV en la carpeta 'logs'
-LOGS_DIR = 'src/logs'
-CSV_FILE = os.path.join(LOGS_DIR, 'datosparaEntrenar.csv')
+# --- 1. CARGAR (O CREAR) CONFIGURACIÓN POR DEFECTO ---
+default_cfg = {"total_readings_per_position": 300}
+if not os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(default_cfg, f, indent=2, ensure_ascii=False)
+    print(f"Se creó {CONFIG_FILE} con {default_cfg}")
 
-# Crear la carpeta 'logs' si no existe
-if not os.path.exists(LOGS_DIR):
-    os.makedirs(LOGS_DIR)
+with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+    cfg = json.load(f)
 
-# Estructuras de datos globales
-current_row = None  # Fila pendiente
-row_lock = threading.RLock()
-timeout_thread = None
-TIMEOUT_SECONDS = 3.5 # Tiempo de espera para completar la fila
-esp32_ids = {
-    'receivers/1': 'ESP32_1',
-    'receivers/2': 'ESP32_2',
-    'receivers/3': 'ESP32_3',
-    'receivers/4': 'ESP32_4',
-    'receivers/5': 'ESP32_5',
-    'receivers/6': 'ESP32_6',
-    'receivers/7': 'ESP32_7',
-    'receivers/8': 'ESP32_8',
-    'receivers/9': 'ESP32_9',
-    'receivers/10': 'ESP32_10'
+# --- 2. DECIDIR MODO DE FUNCIONAMIENTO ---
+default_n = cfg.get("total_readings_per_position", 300)
+resp = input(f"¿Usar configuración por defecto? ({default_n} lecturas/posición) [S/n]: ").strip().lower()
+if resp in ('', 's', 'si', 'y', 'yes'):
+    default_mode    = True
+    total_readings  = default_n
+else:
+    default_mode    = False
+    total_readings  = 0
+    while total_readings < 1:
+        try:
+            total_readings = int(input("¿Cuántas lecturas por posición vas a recoger? "))
+        except ValueError:
+            print("Número entero, por favor.")
+
+# --- 3. DEFINIR HABITACIONES Y POSICIONES ---
+ROOM_OPTIONS = {
+    1: 'Dormitorio',
+    2: 'Cocina',
+    3: 'Baño',
+    4: 'Salón'
+}
+POSITION_OPTIONS = {
+    'Dormitorio': ['Cama', 'Escritorio'],
+    'Cocina':     ['Fregadero','Vitroceramica','Frigorifico'],
+    'Baño':       ['Lavabo','WC'],
+    'Salón':      ['Sofá','Mesa de juegos']
 }
 
+# --- 4. SECUENCIA AUTOMÁTICA (solo en default_mode) ---
+if default_mode:
+    sequence = []
+    for _, room in ROOM_OPTIONS.items():
+        for pos in POSITION_OPTIONS[room]:
+            sequence.append((room, pos))
+    seq_index = 0
+    max_seq   = len(sequence)
+
+# Variables globales de ubicación y conteo
+current_room     = None
+current_position = None
+rows_written     = 0
+
+def print_instruction():
+    """Muestra la instrucción al usuario para la posición actual."""
+    print("\n────────────────────────────────────")
+    if default_mode:
+        print(f"Posición {seq_index+1}/{max_seq}: {current_room} → {current_position}")
+    else:
+        print(f"Grabando para {current_room} → {current_position}")
+    print(f"Mantente en '{current_position}' y mueve el reloj mientras recolectamos datos")
+    print(f"({rows_written}/{total_readings})")
+    print("────────────────────────────────────\n")
+
+def ask_location_manual():
+    """Modo manual: menus numerados para habitación y posición."""
+    global current_room, current_position, rows_written
+    print("\nSelecciona HABITACIÓN:")
+    for k,v in ROOM_OPTIONS.items(): print(f"  {k}) {v}")
+    c = 0
+    while c not in ROOM_OPTIONS:
+        try: c = int(input("Número de habitación: "))
+        except: pass
+    current_room = ROOM_OPTIONS[c]
+
+    opts = POSITION_OPTIONS[current_room]
+    print(f"\nSelecciona POSICIÓN en {current_room}:")
+    for i,v in enumerate(opts,1): print(f"  {i}) {v}")
+    c2 = 0
+    while not (1<=c2<=len(opts)):
+        try: c2 = int(input("Número de posición: "))
+        except: pass
+    current_position = opts[c2-1]
+
+    rows_written = 0
+    print_instruction()
+
+def setup_next_default():
+    """Avanza en la secuencia automática y pide confirmación."""
+    global seq_index, current_room, current_position, rows_written
+    seq_index += 1
+    if seq_index >= max_seq:
+        print("\n¡Secuencia completa! Todos los puntos han sido muestreados.")
+        os._exit(0)
+    # Esperamos a que el usuario se mueva a la siguiente posición
+    input(f"\n--- {total_readings}/{total_readings} alcanzado. "
+          f"Múevete a '{sequence[seq_index][1]}' en '{sequence[seq_index][0]}', y pulsa ENTER cuando estés listo.")
+    current_room, current_position = sequence[seq_index]
+    rows_written = 0
+    print_instruction()
+
+# --- 5. CALLBACKS y CSV ---
+# Aseguramos carpeta y MQTT IDs
+os.makedirs(LOGS_DIR, exist_ok=True)
+esp32_ids = {f"receivers/{i}":f"ESP32_{i}" for i in range(1,11)}
 all_esp32_ids = list(esp32_ids.values())
 
-# Función que se llama cuando se establece la conexión con el broker
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        print("Conectado al broker MQTT")
-        client.subscribe(MQTT_TOPIC)
-    else:
-        print("Error al conectar, código de error:", rc)
+current_row    = None
+row_lock       = threading.RLock()
+timeout_thread = None
+TIMEOUT_SECONDS=3.5
 
-# Función que se llama cuando se recibe un mensaje
+def on_connect(client, userdata, flags, rc):
+    if rc==0:
+        print("Conectado al broker MQTT")
+        client.subscribe("receivers/#")
+    else:
+        print("Error al conectar:", rc)
+
 def on_message(client, userdata, msg):
     global current_row, timeout_thread
-
     try:
         data = json.loads(msg.payload.decode())
-        print("Mensaje recibido:", data)
+        esp  = esp32_ids.get(msg.topic)
+        if not esp: return
 
-        esp32_id = esp32_ids.get(msg.topic)
-        if not esp32_id:
-            print(f"Tópico desconocido: {msg.topic}")
-            return
+        tstr = data.get('time')
+        rssi = int(data.get('rssi',0))
+        t_idx= pd.to_datetime(tstr,format='%d/%m/%Y %H:%M:%S')
 
-        timestamp_str = data.get('time')
-        rssi = int(data.get('rssi', 0))
+        with row_lock:
+            if current_row is None:
+                current_row = {
+                    'time':t_idx,
+                    'Habitacion':current_room,
+                    'Posicion':current_position
+                }
+                for e in all_esp32_ids: current_row[e]=None
+                timeout_thread = threading.Timer(TIMEOUT_SECONDS, write_row_to_csv)
+                timeout_thread.start()
 
-        if timestamp_str and esp32_id:
-            # Convertir el tiempo a objeto datetime
-            time_index = pd.to_datetime(timestamp_str, format='%d/%m/%Y %H:%M:%S')
-
-            with row_lock:
-                if current_row is None:
-                    # Crear una nueva fila pendiente con todas las claves de los ESP32
-                    current_row = {'time': time_index}
-                    for esp_id in all_esp32_ids:
-                        current_row[esp_id] = None
-                    print(f"Fila pendiente creada: {current_row}")
-
-                    # Iniciar temporizador para cerrar la fila después de TIMEOUT_SECONDS
-                    timeout_thread = threading.Timer(TIMEOUT_SECONDS, write_row_to_csv)
-                    timeout_thread.start()
-
-                # Actualizar la fila pendiente con los datos recibidos
-                current_row[esp32_id] = rssi
-                print(f"Fila pendiente actualizada: {current_row}")
-
-                # Verificar si todos los ESP32 han enviado datos
-                if all(current_row[esp_id] is not None for esp_id in all_esp32_ids):
-                    print("Todos los datos recibidos antes del timeout. Escribiendo fila en CSV.")
-                    write_row_to_csv()
-
+            current_row[esp]=rssi
+            if all(current_row[e] is not None for e in all_esp32_ids):
+                write_row_to_csv()
     except Exception as e:
-        print("Error al procesar el mensaje:", e)
+        print("Error al procesar mensaje:", e)
 
-# Función para escribir la fila pendiente en el CSV
 def write_row_to_csv():
-    global current_row, timeout_thread
-
+    global current_row, timeout_thread, rows_written
     with row_lock:
-        if current_row is not None:
-            # Reemplazar None por -150
-            for esp_id in all_esp32_ids:
-                if current_row[esp_id] is None:
-                    current_row[esp_id] = -150
+        if current_row is None: return
+        # Completar vacíos
+        for e in all_esp32_ids:
+            if current_row[e] is None:
+                current_row[e] = -150
+        # DataFrame y orden columnas
+        df = pd.DataFrame([current_row]).set_index('time')
+        cols = all_esp32_ids + ['Habitacion','Posicion']
+        df = df[cols]
+        # Escribimos con formato de fecha
+        header = not os.path.exists(CSV_FILE) or os.path.getsize(CSV_FILE)==0
+        df.to_csv(
+            CSV_FILE, mode='a', header=header,
+            date_format='%d/%m/%Y %H:%M:%S', index_label='time'
+        )
+        # Contador y feedback
+        rows_written += 1
+        print(f"[{rows_written}/{total_readings}] {current_room}/{current_position}")
+        # Limpiar
+        current_row = None
+        if timeout_thread:
+            timeout_thread.cancel()
+            timeout_thread=None
+        # ¿Fin del bloque?
+        if rows_written >= total_readings:
+            if default_mode:
+                setup_next_default()
+            else:
+                ask_location_manual()
 
-            df_row = pd.DataFrame([current_row])
-            df_row.set_index('time', inplace=True)
-
-            write_header = not os.path.exists(CSV_FILE) or os.path.getsize(CSV_FILE) == 0
-
-            df_row.to_csv(CSV_FILE, mode='a', header=write_header)
-            print(f"Fila escrita en CSV: {df_row}")
-
-            current_row = None
-
-            # Cancelar el temporizador si está activo
-            if timeout_thread is not None:
-                timeout_thread.cancel()
-                timeout_thread = None
-
-# Configuración del cliente MQTT
+# --- 6. ARRANQUE ---
 client = mqtt.Client()
-client.username_pw_set(MQTT_USER, MQTT_PASSWORD)
+client.username_pw_set("fran","1234")
 client.on_connect = on_connect
 client.on_message = on_message
 
-# Conexión al broker
-try:
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
-except Exception as e:
-    print(f"Error al conectar con el broker MQTT: {e}")
-    exit(1)
+# Primera ubicación
+if default_mode:
+    current_room, current_position = sequence[0]
+    rows_written = 0
+    print("\n--- MODO POR DEFECTO ACTIVADO ---")
+    print(f"Harás {total_readings} lecturas en cada posición.\n")
+    print_instruction()
+else:
+    ask_location_manual()
 
-# Iniciar el bucle del cliente MQTT
 try:
+    client.connect("192.168.0.190",1883,60)
     client.loop_forever()
 except KeyboardInterrupt:
-    print("\nInterrupción del programa por el usuario. Guardando datos y cerrando conexión...")
+    print("\nInterrumpido. Cerrando...")
     client.disconnect()
