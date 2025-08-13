@@ -1,4 +1,5 @@
 # utils/helpers.py
+from collections import Counter
 import datetime
 from PIL import Image, ImageDraw
 import os
@@ -46,31 +47,56 @@ ultima_posicion = None
 CSV_PATH = "src/logs/predicciones_xgboost.csv"
 ACTIONS_PATH = "src/logs/acciones_detectadas.csv"
 
+VENTANA_SEG = 6         # últimos 6 s
+UMBRAL_MAYORIA = 0.67   # 2/3 de los puntos
+UMBRAL_CAMBIO = 4       # exigir 4 s de persistencia antes de “confirmar” el cambio
+
+_ultima_confirmada = None          # (hab, pos)
+_ts_ultimo_candidato = None        # cuando apareció el candidato
+_candidato = None                  # (hab, pos)
+
 
 def posicion_estable() -> tuple[str, str] | None:
-    try:
-        df = pd.read_csv(CSV_PATH)
-        v = df.tail(3)
-        if len(v) < 2:
-            return None
-        v = v[
-            (v["habitacion_predicha"] != "Duda")
-            & (v["posicion_predicha"] != "Duda")
-        ]
-        v = v[
-            v.apply(
-                lambda r: r["posicion_predicha"]
-                in VALID_POSITIONS_BY_ROOM.get(r["habitacion_predicha"], []),
-                axis=1,
-            )
-        ]
-        if len(v) < 2:
-            return None
-        h = v["habitacion_predicha"].unique()
-        p = v["posicion_predicha"].unique()
-        return (h[0], p[0]) if len(h) == 1 and len(p) == 1 else None
-    except Exception:
-        return None
+    global _ultima_confirmada, _ts_ultimo_candidato, _candidato
+
+    df = pd.read_csv(CSV_PATH)
+    df["time"] = pd.to_datetime(df["time"], errors="coerce", dayfirst=True)
+
+    if df.empty:
+        return _ultima_confirmada
+
+    tmax = df["time"].max()
+    ventana = df[df["time"] >= tmax - pd.Timedelta(seconds=VENTANA_SEG)]
+    if ventana.empty:
+        return _ultima_confirmada
+
+    ventana = ventana[
+        (ventana["habitacion_predicha"] != "Duda") &
+        (ventana["posicion_predicha"]   != "Duda")
+    ]
+    ventana = ventana[
+        ventana.apply(lambda r: r["posicion_predicha"] in
+                      VALID_POSITIONS_BY_ROOM.get(r["habitacion_predicha"], []), axis=1)
+    ]
+    if ventana.empty:
+        return _ultima_confirmada
+
+    pares = list(zip(ventana["habitacion_predicha"], ventana["posicion_predicha"]))
+    (hab,pos), freq = Counter(pares).most_common(1)[0]
+    if freq / len(pares) < UMBRAL_MAYORIA:
+        return _ultima_confirmada
+
+    # Histeresis: confirmar cambio si persiste X s
+    if _candidato != (hab,pos):
+        _candidato = (hab,pos)
+        _ts_ultimo_candidato = tmax
+        return _ultima_confirmada
+
+    if (tmax - _ts_ultimo_candidato).total_seconds() >= UMBRAL_CAMBIO:
+        _ultima_confirmada = _candidato
+
+    return _ultima_confirmada
+
 
 def dibujar_esps(draw, fila):
     for esp, (x, y) in ESP_POSICIONES.items():
